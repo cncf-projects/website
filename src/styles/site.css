@@ -43,7 +43,7 @@ button:disabled { opacity: .6; cursor: wait; }
 .metric-wide { grid-column: span 2; }
 .metric dt { font-size: .82rem; font-weight: 550; color: var(--muted); }
 .metric dd { margin: 9px 0; font-size: 1.65rem; font-weight: 650; line-height: 1.25; letter-spacing: -.03em; overflow-wrap: anywhere; }
-.metric-detail { font-size: .75rem; }
+.metric .metric-detail { margin: 0; font-size: .75rem; font-weight: 400; letter-spacing: normal; line-height: 1.5; }
 .history { display: grid; grid-template-columns: 1fr 1fr; padding: 24px 28px; gap: 24px; background: #fafbfb; }
 .unavailable { margin: 8px 0 3px; color: var(--muted); font-size: 1.05rem; }
 .category-footer { padding: 22px 28px; border-top: 1px solid var(--border); }

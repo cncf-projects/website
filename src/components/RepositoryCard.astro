@@ -35,7 +35,7 @@ const metrics = [
       <div class:list={['metric', { 'metric-wide': key === 'category' }]}>
         <dt>{label}</dt>
         <dd data-metric={key}>No data</dd>
-        <p class="metric-detail" data-detail={key}>{detail}</p>
+        <dd class="metric-detail" data-detail={key} data-default-detail={detail}>{detail}</dd>
       </div>
     ))}
   </dl>

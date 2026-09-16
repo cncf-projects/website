@@ -93,6 +93,9 @@ form.addEventListener('submit', async (event) => {
       card.querySelectorAll<HTMLElement>('[data-metric]').forEach((metric) => {
         metric.textContent = 'No data';
       });
+      card.querySelectorAll<HTMLElement>('[data-default-detail]').forEach((detail) => {
+        detail.textContent = detail.dataset.defaultDetail!;
+      });
       const snapshot = await fetchRepository(
         repositoryFor(card), token, controller.signal, (message) => status(card, message),
       );
