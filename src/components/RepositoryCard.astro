@@ -1,0 +1,60 @@
+---
+import { discussionUrl, type Repository } from '../lib/model';
+import { WINDOW_DAYS } from '../lib/metrics';
+
+interface Props {
+  repository: Repository;
+}
+
+const { repository } = Astro.props;
+const url = discussionUrl(repository);
+const metrics = [
+  ['participants', 'Unique participants', 'Identifiable authors of posts, comments, or replies'],
+  ['discussions', 'Discussions opened', 'New discussions in this window'],
+  ['comments', 'Comments and replies', 'Including responses on older discussions'],
+  ['questions', 'Answered / unanswered', 'Q&A opened in this window; current answer status'],
+  ['response', 'Median first response', 'First response by someone other than the author'],
+  ['cohorts', 'New / returning', 'Based on each participant’s visible contribution history'],
+  ['category', 'Most active category', 'By posts, comments, and replies; ties shown'],
+];
+---
+
+<article class="repository-card" data-repository data-owner={repository.owner} data-name={repository.name}>
+  <header class="repository-header">
+    <div>
+      <p class="eyebrow">Repository</p>
+      <h2><a href={url}>{repository.owner}<span aria-hidden="true"> / </span><span class="sr-only"> / </span>{repository.name}</a></h2>
+      <p class="muted">Trailing {WINDOW_DAYS} days · All categories</p>
+    </div>
+    <a class="subscribe" href={`${url}.atom`}>Subscribe via RSS <span aria-hidden="true">↗</span></a>
+  </header>
+
+  <p class="data-status" data-status role="status">No data. Enter a GitHub token to load live metrics.</p>
+  <dl class="metrics">
+    {metrics.map(([key, label, detail]) => (
+      <div class:list={['metric', { 'metric-wide': key === 'category' }]}>
+        <dt>{label}</dt>
+        <dd data-metric={key}>No data</dd>
+        <p class="metric-detail" data-detail={key}>{detail}</p>
+      </div>
+    ))}
+  </dl>
+
+  <div class="history">
+    <div>
+      <h3>Activity sparkline</h3>
+      <p class="unavailable">Insufficient history</p>
+      <p class="muted">Trailing {WINDOW_DAYS}-day activity series unavailable.</p>
+    </div>
+    <div>
+      <h3>Period-over-period trend</h3>
+      <p class="unavailable">Insufficient history</p>
+      <p class="muted">No stored snapshots to compare.</p>
+    </div>
+  </div>
+  <footer class="category-footer">
+    <h3>Follow a category</h3>
+    <p class="muted" data-category-status>Categories appear after a live fetch. The repository RSS feed is always available.</p>
+    <ul class="category-links" data-categories></ul>
+  </footer>
+</article>
