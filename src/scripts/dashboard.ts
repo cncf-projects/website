@@ -1,113 +1,347 @@
-import { fetchRepository } from '../lib/github';
-import { discussionUrl, type Repository, type Snapshot } from '../lib/model';
-import { summarize } from '../lib/metrics';
+import { analysis, repositories } from '../config/site';
+import { categoryFeedUrl } from '../lib/feeds';
+import { fetchSnapshot } from '../lib/github';
+import type { RepositoryRef, Snapshot } from '../lib/model';
+import { summarize, type Metric, type Summary } from '../lib/metrics';
+import { sparkline } from '../lib/sparkline';
 
-const cards = [...document.querySelectorAll<HTMLElement>('[data-repository]')];
 const form = document.querySelector<HTMLFormElement>('#access-form')!;
-const input = document.querySelector<HTMLInputElement>('#github-token')!;
-const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-const cancel = document.querySelector<HTMLButtonElement>('#cancel')!;
-const number = new Intl.NumberFormat();
-let controller: AbortController | undefined;
+const tokenInput = document.querySelector<HTMLInputElement>('#github-token')!;
+const remember = document.querySelector<HTMLInputElement>('#remember')!;
+const loadButton = document.querySelector<HTMLButtonElement>('#load')!;
+const cancelButton = document.querySelector<HTMLButtonElement>('#cancel')!;
+const formStatus = document.querySelector<HTMLElement>('#form-status')!;
 
-function repositoryFor(card: HTMLElement): Repository {
-  return { owner: card.dataset.owner!, name: card.dataset.name! };
+const rows = new Map<string, HTMLElement>();
+for (const row of document.querySelectorAll<HTMLElement>('[data-repository]')) {
+  rows.set(row.dataset.key!, row);
+}
+const panels = new Map<string, HTMLElement>();
+for (const panel of document.querySelectorAll<HTMLElement>('[data-detail]')) {
+  panels.set(panel.dataset.key!, panel);
 }
 
-function status(card: HTMLElement, text: string) {
-  card.querySelector<HTMLElement>('[data-status]')!.textContent = text;
+const decimal = new Intl.NumberFormat();
+const percent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 });
+const STORAGE_KEY = 'github-token';
+
+let controller: AbortController | null = null;
+
+const PLACEHOLDER: Record<Metric<unknown>['state'], string> = {
+  ok: '',
+  'no-activity': 'No activity',
+  'insufficient-history': 'Insufficient history',
+  unavailable: 'No data',
+};
+
+const PLACEHOLDER_HINT: Record<Metric<unknown>['state'], string> = {
+  ok: '',
+  'no-activity': 'Measured, and nothing happened in this window.',
+  'insufficient-history': 'Read, but not far enough back to answer this honestly.',
+  unavailable: 'The fetch failed, so this was not measured.',
+};
+
+function duration(ms: number): string {
+  const minutes = ms / 60_000;
+  if (minutes < 1) return 'under a minute';
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  if (minutes < 48 * 60) return `${(minutes / 60).toFixed(1)} h`;
+  return `${(minutes / 1440).toFixed(1)} days`;
 }
 
-function duration(milliseconds: number): string {
-  const minutes = milliseconds / 60_000;
-  if (minutes < 1) return '< 1 min';
-  if (minutes < 60) return `${number.format(Math.round(minutes))} min`;
-  if (minutes < 1440) return `${number.format(Math.round(minutes / 60 * 10) / 10)} h`;
-  return `${number.format(Math.round(minutes / 1440 * 10) / 10)} days`;
-}
-
-function render(card: HTMLElement, snapshot: Snapshot) {
-  const metrics = summarize(snapshot);
-  const set = (key: string, value: string | number | null) => {
-    card.querySelector<HTMLElement>(`[data-metric="${key}"]`)!.textContent =
-      value === null ? 'No data' : typeof value === 'number' ? number.format(value) : value;
-  };
-  set('participants', metrics.participants);
-  set('discussions', metrics.discussions);
-  set('comments', metrics.comments);
-  set('questions', metrics.questions ?
-    `${number.format(metrics.questions.answered)} / ${number.format(metrics.questions.unanswered)}` : null);
-  if (metrics.questions) {
-    const total = metrics.questions.answered + metrics.questions.unanswered;
-    card.querySelector<HTMLElement>('[data-detail="questions"]')!.textContent = total ?
-      `${Math.round(metrics.questions.answered / total * 100)}% answered · Q&A opened in this window` :
-      'No Q&A discussions opened in this window';
+/**
+ * `emptyLabel` overrides the wording for a measured-but-empty result, where a
+ * blanket "No activity" would overclaim: a window can hold plenty of activity
+ * and still contain no questions, or no answered ones.
+ */
+function setMetric(
+  row: HTMLElement,
+  key: string,
+  metric: Metric<unknown>,
+  text: string | null,
+  emptyLabel?: string,
+) {
+  const cell = row.querySelector<HTMLElement>(`[data-metric="${key}"]`)!;
+  if (metric.state === 'ok' && text !== null) {
+    cell.textContent = text;
+    cell.className = '';
+    cell.removeAttribute('title');
+  } else {
+    const named = metric.state === 'no-activity' && emptyLabel;
+    cell.textContent = named ? emptyLabel : PLACEHOLDER[metric.state];
+    cell.className = 'cell-empty';
+    // A window can be busy and still hold nothing of this particular kind, so
+    // the generic "nothing happened" hint would be wrong here.
+    cell.title = named
+      ? 'Measured; there was nothing of this kind in the window.'
+      : PLACEHOLDER_HINT[metric.state];
   }
-  set('response', metrics.medianResponse === null ?
-    (metrics.responseSample === 0 ? 'No responses' : null) : duration(metrics.medianResponse));
-  card.querySelector<HTMLElement>('[data-detail="response"]')!.textContent =
-    metrics.responseSample === null ? 'First response by someone other than the author' :
-      `${number.format(metrics.responseSample)} discussions with an identifiable outside response`;
-  set('cohorts', metrics.newParticipants === null ? null :
-    `${number.format(metrics.newParticipants)} / ${number.format(metrics.returningParticipants!)}`);
-  set('category', metrics.mostActive === null ? null :
-    metrics.mostActive.length ? metrics.mostActive.map((category) => category.name).join(' / ') : 'No activity');
+}
 
-  const categories = card.querySelector<HTMLUListElement>('[data-categories]')!;
-  categories.replaceChildren();
+function renderSparkline(row: HTMLElement, summary: Summary, label: string) {
+  const svg = row.querySelector<SVGElement>('[data-sparkline]')!;
+  const line = row.querySelector<SVGPolylineElement>('[data-sparkline-line]')!;
+  const area = row.querySelector<SVGPathElement>('[data-sparkline-area]')!;
+  const fallback = row.querySelector<HTMLElement>('[data-sparkline-empty]')!;
+  const metric = summary.series;
+
+  if (metric.state !== 'ok' || !metric.value) {
+    svg.setAttribute('hidden', '');
+    fallback.hidden = false;
+    fallback.textContent = PLACEHOLDER[metric.state];
+    return;
+  }
+
+  const path = sparkline(metric.value.buckets);
+  line.setAttribute('points', path.line);
+  area.setAttribute('d', path.area);
+  svg.removeAttribute('hidden');
+  fallback.hidden = true;
+
+  const days = Math.round(metric.value.bucketDays);
+  svg.setAttribute(
+    'aria-label',
+    `Discussion activity for ${label}: ${metric.value.buckets.join(', ')} contributions per ${days}-day period, oldest first. Peak ${path.peak}.`,
+  );
+}
+
+function renderTrend(row: HTMLElement, summary: Summary) {
+  const cell = row.querySelector<HTMLElement>('[data-trend]')!;
+  const metric = summary.trend;
+
+  if (metric.state !== 'ok' || !metric.value) {
+    cell.textContent = PLACEHOLDER[metric.state];
+    cell.className = 'trend cell-empty';
+    return;
+  }
+
+  const { change, ratio, current, previous } = metric.value;
+  const direction = change > 0 ? 'up' : change < 0 ? 'down' : 'flat';
+  const sign = change > 0 ? '+' : change < 0 ? '\u2212' : '';
+  const magnitude = ratio === null ? decimal.format(Math.abs(change)) : percent.format(Math.abs(ratio));
+
+  cell.className = `trend trend-${direction}`;
+  cell.textContent = direction === 'flat' ? 'No change' : `${sign}${magnitude}`;
+  cell.title = `${current} contributions this window against ${previous} in the previous one.`;
+}
+
+function renderCategories(panel: HTMLElement, snapshot: Snapshot) {
+  const list = panel.querySelector<HTMLUListElement>('[data-categories]')!;
+  const status = panel.querySelector<HTMLElement>('[data-category-status]')!;
+  list.replaceChildren();
+
+  if (snapshot.categories.length === 0) {
+    status.textContent =
+      'Categories could not be read. The board feed above still covers every category.';
+    return;
+  }
+
+  status.textContent = 'Each category publishes its own feed.';
   for (const category of snapshot.categories) {
     const item = document.createElement('li');
     const link = document.createElement('a');
-    link.href = `${discussionUrl(snapshot.repository)}/categories/${encodeURIComponent(category.slug)}`;
+    link.className = 'subscribe subscribe-category';
+    link.href = categoryFeedUrl(snapshot.repository, category);
     link.textContent = category.name;
     item.append(link);
-    categories.append(item);
+    list.append(item);
   }
-  card.querySelector<HTMLElement>('[data-category-status]')!.textContent = snapshot.categories.length ?
-    'Category pages on GitHub. Subscribe to the repository feed above.' :
-    'Category data unavailable. The repository RSS feed is still available.';
-  const errors = [...new Set(snapshot.errors)];
-  status(card, errors.length ?
-    `${errors.join(' ')} Affected metrics show no data.` :
-    `Live data · ${new Date(snapshot.asOf).toLocaleString()} · ${number.format(snapshot.discussions.length)} discussions inspected`);
 }
 
-cancel.addEventListener('click', () => controller?.abort());
+function render(key: string, snapshot: Snapshot) {
+  const row = rows.get(key)!;
+  const panel = panels.get(key)!;
+  const summary = summarize(snapshot, analysis);
+  const label = key;
 
-form.addEventListener('submit', async (event) => {
+  setMetric(row, 'participants', summary.participants, decimal.format(summary.participants.value ?? 0));
+  setMetric(row, 'discussions', summary.discussionsOpened, decimal.format(summary.discussionsOpened.value ?? 0));
+  setMetric(row, 'comments', summary.comments, decimal.format(summary.comments.value ?? 0));
+
+  const answered = summary.answered.value;
+  setMetric(
+    row,
+    'answered',
+    summary.answered,
+    answered ? `${percent.format(answered.ratio)} of ${answered.answered + answered.unanswered}` : null,
+    'No questions',
+  );
+
+  setMetric(
+    row,
+    'response',
+    summary.medianFirstResponse,
+    summary.medianFirstResponse.value === null ? null : duration(summary.medianFirstResponse.value),
+    'No responses',
+  );
+  const responseCell = row.querySelector<HTMLElement>('[data-metric="response"]')!;
+  if (summary.medianFirstResponse.state === 'ok') {
+    responseCell.title = `Median across ${summary.firstResponseSample} discussion(s) that received a response.`;
+  }
+
+  const cohorts = summary.cohorts.value;
+  setMetric(row, 'cohorts', summary.cohorts, cohorts ? `${cohorts.newcomers} / ${cohorts.returning}` : null);
+
+  const category = summary.topCategory.value;
+  setMetric(row, 'category', summary.topCategory, category ? category.names.join(', ') : null);
+  if (category) {
+    row.querySelector<HTMLElement>('[data-metric="category"]')!.title =
+      `${category.events} contributions in this window.`;
+  }
+
+  renderSparkline(row, summary, label);
+  renderTrend(row, summary);
+  renderCategories(panel, snapshot);
+
+  const status = row.querySelector<HTMLElement>('[data-status]')!;
+  const parts: string[] = [];
+  if (snapshot.errors.length > 0) {
+    parts.push(...new Set(snapshot.errors));
+  } else {
+    parts.push(`Read ${decimal.format(snapshot.discussions.length)} discussions`);
+    if (!snapshot.historyComplete) parts.push('history incomplete');
+  }
+  status.textContent = parts.join(' \u00b7 ');
+  status.className = snapshot.errors.length > 0 ? 'row-status row-status-error' : 'row-status';
+
+  const meta = panel.querySelector<HTMLElement>('[data-meta]')!;
+  const detail = document.createElement('span');
+  detail.className = 'muted';
+  detail.textContent = ` Loaded ${new Date(snapshot.asOf).toLocaleTimeString()} in ${snapshot.requests} request(s).${
+    snapshot.rateLimit.remaining === null ? '' : ` ${decimal.format(snapshot.rateLimit.remaining)} API points left.`
+  }`;
+  meta.querySelector('.muted')?.remove();
+  meta.append(detail);
+}
+
+function resetRow(key: string) {
+  const row = rows.get(key)!;
+  for (const cell of row.querySelectorAll<HTMLElement>('[data-metric]')) {
+    cell.textContent = 'Loading';
+    cell.className = 'cell-empty';
+  }
+  row.querySelector<HTMLElement>('[data-trend]')!.textContent = 'Loading';
+  row.querySelector<HTMLElement>('[data-status]')!.textContent = 'Loading';
+}
+
+/**
+ * Repositories are independent, so they load concurrently. The pool is bounded
+ * rather than a bare Promise.all: a few hundred simultaneous fetches would
+ * exhaust the rate limit in one burst and give every row a failure to show.
+ */
+const CONCURRENCY = 4;
+
+async function load(token: string) {
+  controller = new AbortController();
+  loadButton.disabled = true;
+  tokenInput.disabled = true;
+  cancelButton.hidden = false;
+
+  const queue = [...repositories];
+  let failure: unknown = null;
+
+  const worker = async () => {
+    for (;;) {
+      const repository = queue.shift();
+      if (!repository || controller?.signal.aborted) return;
+
+      const ref: RepositoryRef = { owner: repository.owner, name: repository.name };
+      const key = `${repository.owner}/${repository.name}`;
+      resetRow(key);
+      const status = rows.get(key)!.querySelector<HTMLElement>('[data-status]')!;
+
+      try {
+        const snapshot = await fetchSnapshot(ref, token, analysis, controller!.signal, (message) => {
+          status.textContent = message;
+        });
+        render(key, snapshot);
+      } catch (error) {
+        // One repository must never take the others, or the page, down with it.
+        // Render a failed snapshot rather than only rewriting the status line, or
+        // the cells stay stuck on "Loading" and claim work that never finished.
+        failure ??= error;
+        render(key, {
+          repository: ref,
+          asOf: Date.now(),
+          categories: [],
+          discussions: [],
+          historyComplete: false,
+          oldestFetchedAt: null,
+          requests: 0,
+          rateLimit: { remaining: null, resetAt: null },
+          errors: [error instanceof Error ? error.message : 'This repository could not be read.'],
+        });
+      }
+    }
+  };
+
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker),
+    );
+    formStatus.textContent = controller.signal.aborted
+      ? 'Cancelled.'
+      : failure
+        ? 'Finished with errors. Affected rows say so.'
+        : 'Done.';
+  } finally {
+    controller = null;
+    loadButton.disabled = false;
+    tokenInput.disabled = false;
+    cancelButton.hidden = true;
+  }
+}
+
+/*
+ * Rendering changes the table's width: "Insufficient history" is far wider than
+ * the placeholder it replaces. Watching the viewport alone would leave the hint
+ * stale after a load, so the table itself is observed.
+ */
+function updateScrollHint() {
+  const scroll = document.querySelector<HTMLElement>('[data-table-scroll]');
+  const hint = document.querySelector<HTMLElement>('[data-scroll-hint]');
+  if (!scroll || !hint) return;
+  hint.hidden = scroll.scrollWidth <= scroll.clientWidth;
+}
+
+const scrollContainer = document.querySelector<HTMLElement>('[data-table-scroll]');
+const leaderboardTable = scrollContainer?.querySelector('table');
+updateScrollHint();
+
+if (scrollContainer && leaderboardTable) {
+  const observer = new ResizeObserver(updateScrollHint);
+  observer.observe(scrollContainer);
+  observer.observe(leaderboardTable);
+} else {
+  window.addEventListener('resize', updateScrollHint);
+}
+
+cancelButton.addEventListener('click', () => controller?.abort());
+
+form.addEventListener('submit', (event) => {
   event.preventDefault();
   if (controller) return;
-  let token = input.value.trim();
+
+  const token = tokenInput.value.trim();
   if (!token) {
-    input.value = '';
-    input.reportValidity();
+    tokenInput.reportValidity();
     return;
   }
-  input.value = '';
-  input.disabled = true;
-  submit.disabled = true;
-  cancel.hidden = false;
-  controller = new AbortController();
-  try {
-    for (const card of cards) {
-      card.querySelectorAll<HTMLElement>('[data-metric]').forEach((metric) => {
-        metric.textContent = 'No data';
-      });
-      card.querySelectorAll<HTMLElement>('[data-default-detail]').forEach((detail) => {
-        detail.textContent = detail.dataset.defaultDetail!;
-      });
-      const snapshot = await fetchRepository(
-        repositoryFor(card), token, controller.signal, (message) => status(card, message),
-      );
-      render(card, snapshot);
-    }
-  } catch {
-    cards.forEach((card) => status(card, 'Unable to load data. Retry with a valid token. RSS remains available.'));
-  } finally {
-    token = '';
-    controller = undefined;
-    input.disabled = false;
-    submit.disabled = false;
-    cancel.hidden = true;
+
+  if (remember.checked) {
+    sessionStorage.setItem(STORAGE_KEY, token);
+  } else {
+    sessionStorage.removeItem(STORAGE_KEY);
+    tokenInput.value = '';
   }
+
+  formStatus.textContent = 'Reading the GitHub API.';
+  void load(token);
 });
+
+const saved = sessionStorage.getItem(STORAGE_KEY);
+if (saved) {
+  tokenInput.value = saved;
+  remember.checked = true;
+  formStatus.textContent = 'Token restored for this tab. Load metrics to refresh.';
+}

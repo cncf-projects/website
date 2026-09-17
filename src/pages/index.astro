@@ -1,60 +1,191 @@
 ---
-import RepositoryCard from '../components/RepositoryCard.astro';
-import repositories from '../data/repositories.json';
+import Leaderboard from '../components/Leaderboard.astro';
+import SubscribePanel from '../components/SubscribePanel.astro';
+import { analysis, repositories } from '../config/site';
 import '../styles/site.css';
+
+const windowDays = analysis.windowDays;
 ---
 
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
-    <meta name="description" content="GitHub Discussions participation, response metrics, and RSS subscriptions." />
+    <meta
+      name="description"
+      content="GitHub Discussions engagement metrics and Atom subscriptions, measured live from the GitHub API."
+    />
     <title>Discussion engagement</title>
   </head>
   <body>
     <main>
       <header class="page-header">
-        <p class="eyebrow">GitHub Discussions <span class="prototype">Prototype</span></p>
+        <p class="eyebrow">Prototype</p>
         <h1>Discussion engagement</h1>
-        <p>Follow the conversations. See who participates and which questions get a response.</p>
+        <p class="lede">
+          How busy a project's discussion board is, who is taking part, and how quickly
+          questions get answered. Measured over the last {windowDays} days, live from the
+          GitHub API. Subscribe to follow a board without checking this page.
+        </p>
       </header>
+
+      <section class="access" aria-labelledby="access-heading">
+        <div class="access-copy">
+          <h2 id="access-heading">Load live metrics</h2>
+          <p>
+            GitHub's GraphQL API requires a token, including for public discussions. This
+            site has no server and ships no credential: supply your own read-only token.
+            It is held in memory, sent only to api.github.com, and never written to disk
+            unless you tick the box below.
+          </p>
+          <p class="muted">
+            A classic token with no scopes selected, or a fine-grained token with
+            read-only access to public repositories, is enough. Do not paste a token that
+            carries write access.
+          </p>
+        </div>
+
+        <form id="access-form">
+          <label for="github-token">GitHub token</label>
+          <input
+            id="github-token"
+            name="token"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            required
+            placeholder="ghp_… or github_pat_…"
+          />
+          <label class="checkbox">
+            <input type="checkbox" id="remember" />
+            Keep it for this browser tab only
+          </label>
+          <div class="form-actions">
+            <button type="submit" id="load">Load metrics</button>
+            <button type="button" class="secondary" id="cancel" hidden>Cancel</button>
+          </div>
+          <p class="form-status" id="form-status" role="status">Waiting for a token.</p>
+        </form>
+
+        <noscript>
+          <p class="notice">
+            Metrics need JavaScript, because the browser calls the GitHub API directly.
+            The subscription links below work without it.
+          </p>
+        </noscript>
+      </section>
 
       <section aria-labelledby="leaderboard-heading">
         <div class="section-heading">
-          <h2 id="leaderboard-heading">Repository overview</h2>
-          <span class="muted">Live API data · No stored snapshots</span>
+          <h2 id="leaderboard-heading">Leaderboard</h2>
+          <p class="muted">
+            One row per enrolled repository. Ranking, filtering, and org-wide totals
+            arrive with the multi-repository pass.
+          </p>
         </div>
-        {repositories.map((repository) => <RepositoryCard repository={repository} />)}
+        <Leaderboard repositories={repositories} />
       </section>
 
-      <section class="access" aria-labelledby="access-heading">
-        <div>
-          <h2 id="access-heading">Load live metrics</h2>
-          <p>GitHub’s GraphQL API requires a token, even for public discussions.</p>
-          <p class="muted" id="token-help">Use a fine-grained token with Discussions: read-only access to the enrolled public repositories, or a classic token with no scopes. The token stays in memory, is sent only to api.github.com, and is not saved. Never use a shared or privileged token.</p>
-        </div>
-        <form id="access-form">
-          <label for="github-token">GitHub token</label>
-          <input id="github-token" name="token" type="password" autocomplete="off" spellcheck="false" required aria-describedby="token-help" placeholder="Enter your own read-only token" />
-          <div class="form-actions">
-            <button type="submit">Read live metrics</button>
-            <button type="button" class="secondary" id="cancel" hidden>Cancel</button>
-          </div>
-          <p class="muted">A complete fetch includes older discussions to distinguish new and returning participants. Large threads may take several requests.</p>
-        </form>
-        <noscript><p>JavaScript is required for live metrics. RSS subscriptions work without it.</p></noscript>
+      {repositories.map((repository) => <SubscribePanel repository={repository} />)}
+
+      <section class="methodology" aria-labelledby="methodology-heading">
+        <h2 id="methodology-heading">How these numbers are produced</h2>
+
+        <p>
+          The browser reads the discussion board through the GitHub GraphQL API each time
+          you load metrics. Nothing is cached, stored, or precomputed at build time, so
+          every figure reflects the board as it stands at that moment.
+        </p>
+
+        <h3>Computed from a single fetch</h3>
+        <p>
+          Every metric on this page, including the sparkline and the trend, is derived
+          from timestamps that the API returns alongside each discussion, comment, and
+          reply. Because each contribution carries its own <code>createdAt</code>, one
+          fetch is enough to reconstruct when activity happened and to compare one period
+          against another. No snapshot history is required.
+        </p>
+
+        <h3>What would need stored history</h3>
+        <p>
+          Metrics about state that GitHub only reports as it stands today. Whether a
+          question was answered is a current flag; a question answered last week is
+          indistinguishable from one answered a year ago except where GitHub also exposes
+          an <code>answerChosenAt</code> timestamp. Contributions that were deleted, and
+          discussions moved between categories, leave no trace to recover. Measuring those
+          over time needs periodic snapshots, which this prototype does not keep.
+        </p>
+
+        <h3>Definitions</h3>
+        <dl class="definitions">
+          <dt>Window</dt>
+          <dd>The {windowDays} days ending when the fetch starts.</dd>
+
+          <dt>Participants</dt>
+          <dd>
+            Distinct accounts that opened a discussion, commented, or replied within the
+            window. Bots count. Deleted accounts cannot be attributed and are excluded.
+          </dd>
+
+          <dt>Comments</dt>
+          <dd>
+            Comments and threaded replies created within the window, including those on
+            discussions opened long before it.
+          </dd>
+
+          <dt>Answered</dt>
+          <dd>
+            The share of discussions opened in the window, in categories that accept
+            answers, that currently have an accepted answer. Categories that do not accept
+            answers are excluded rather than counted as unanswered.
+          </dd>
+
+          <dt>First response</dt>
+          <dd>
+            Median time between a discussion opening and the first contribution from
+            somebody other than its author. Discussions with no such response are not
+            counted, so this measures the speed of answers given, not the odds of getting
+            one.
+          </dd>
+
+          <dt>New and returning</dt>
+          <dd>
+            A participant is new when the window holds their first contribution to this
+            board. This needs the whole board to be read; if the fetch stops early, the
+            metric reports insufficient history rather than guessing.
+          </dd>
+
+          <dt>Trend</dt>
+          <dd>
+            Total contributions in the window against the immediately preceding window of
+            equal length.
+          </dd>
+        </dl>
+
+        <h3>When a number is missing</h3>
+        <p>
+          A cell without a number never means zero. It says which of three things
+          happened. <span class="state-word">No activity</span> means the window was read
+          successfully and nothing happened in it.
+          <span class="state-word">Insufficient history</span> means the board was read,
+          but not far enough back to answer that particular question, usually because the
+          request budget or the rate limit ran out.
+          <span class="state-word">No data</span> means the fetch failed, so the metric
+          was never measured. A failure affecting one metric leaves the others, and every
+          subscription link, intact.
+        </p>
       </section>
 
-      <details class="methodology">
-        <summary>What these metrics measure</summary>
-        <p>Counts cover the trailing 30 days, ending when the fetch starts. Comments include nested replies and activity on older discussions. Participants include identifiable users and bots; deleted authors cannot be counted as distinct people.</p>
-        <p>Q&A means any category that accepts answers. Answer status is current, not historical. First response excludes the discussion author’s own responses and discussions with no identifiable outside response.</p>
-        <p>New participants have no earlier visible contribution in this repository’s discussions. Returning participants do. Deleted contributions and category moves limit historical accuracy.</p>
-        <p>Partial fetches show no data for affected metrics, not partial counts. The sparkline and trend are unavailable: this prototype does not store the snapshots needed for those comparisons.</p>
-      </details>
+      <footer class="page-footer">
+        <p>
+          Enrolled repositories come from a single configuration file. Sourcing that list
+          from the CNCF Landscape is a data change, not a code change.
+        </p>
+      </footer>
     </main>
+
     <script>
       import '../scripts/dashboard';
     </script>

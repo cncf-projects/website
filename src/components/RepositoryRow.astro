@@ -1,0 +1,62 @@
+---
+import type { RepositoryConfig } from '../config/site';
+import { analysis } from '../config/site';
+import { repositoryFeedUrl, discussionsUrl } from '../lib/feeds';
+import { sparkline } from '../lib/sparkline';
+
+interface Props {
+  repository: RepositoryConfig;
+}
+
+const { repository } = Astro.props;
+const label = repository.label ?? `${repository.owner}/${repository.name}`;
+const key = `${repository.owner}/${repository.name}`;
+const empty = sparkline(new Array(analysis.sparklineBuckets).fill(0));
+
+const columns = [
+  'participants',
+  'discussions',
+  'comments',
+  'answered',
+  'response',
+  'cohorts',
+  'category',
+] as const;
+---
+
+<tr data-repository data-owner={repository.owner} data-name={repository.name} data-key={key}>
+  <th scope="row" class="col-repo">
+    <a href={discussionsUrl(repository)}>{label}</a>
+    <span class="row-status" data-status>Not loaded</span>
+  </th>
+
+  <td class="col-subscribe">
+    <a class="subscribe subscribe-row" href={repositoryFeedUrl(repository)} data-feed>
+      Subscribe
+    </a>
+  </td>
+
+  <td class="col-spark">
+    <svg
+      class="sparkline"
+      data-sparkline
+      viewBox={`0 0 ${empty.width} ${empty.height}`}
+      width={empty.width}
+      height={empty.height}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={`Discussion activity for ${label}: not loaded`}
+    >
+      <path class="sparkline-area" data-sparkline-area d="" />
+      <polyline class="sparkline-line" data-sparkline-line points="" />
+    </svg>
+    <span class="cell-empty" data-sparkline-empty>Not loaded</span>
+  </td>
+
+  <td class="col-trend"><span class="trend" data-trend>&mdash;</span></td>
+
+  {columns.map((column) => (
+    <td class={`col-${column}`}><span data-metric={column}>&mdash;</span></td>
+  ))}
+
+</tr>

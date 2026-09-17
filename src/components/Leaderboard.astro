@@ -1,0 +1,53 @@
+---
+import type { RepositoryConfig } from '../config/site';
+import { analysis } from '../config/site';
+import RepositoryRow from './RepositoryRow.astro';
+
+interface Props {
+  repositories: RepositoryConfig[];
+}
+
+const { repositories } = Astro.props;
+
+const headers = [
+  ['Repository', 'col-repo', ''],
+  ['Feed', 'col-subscribe', 'Atom subscription; needs no token'],
+  [`Activity, last ${analysis.windowDays} days`, 'col-spark', ''],
+  ['Trend', 'col-trend', 'This window against the one before it'],
+  ['Participants', 'col-participants', 'Distinct accounts posting, commenting, or replying'],
+  ['Discussions', 'col-discussions', 'Opened in this window'],
+  ['Comments', 'col-comments', 'Comments and threaded replies'],
+  ['Answered', 'col-answered', 'Answered share of Q&A discussions opened in this window'],
+  ['First response', 'col-response', 'Median time to a response from somebody other than the author'],
+  ['New / returning', 'col-cohorts', 'Participants with no earlier contribution, against those with one'],
+  ['Top category', 'col-category', 'Most activity in this window'],
+];
+---
+
+<div
+  class="table-scroll"
+  data-table-scroll
+  tabindex="0"
+  role="region"
+  aria-label={`Engagement leaderboard, last ${analysis.windowDays} days`}
+>
+  <table class="leaderboard">
+    <caption class="sr-only">
+      GitHub Discussions engagement over the last {analysis.windowDays} days
+    </caption>
+    <thead>
+      <tr>
+        {headers.map(([label, className, hint]) => (
+          <th scope="col" class={className} title={hint || undefined}>{label}</th>
+        ))}
+      </tr>
+    </thead>
+    <tbody>
+      {repositories.map((repository) => <RepositoryRow repository={repository} />)}
+    </tbody>
+  </table>
+</div>
+
+<p class="scroll-hint" data-scroll-hint hidden>
+  Scroll the table sideways for the remaining metrics.
+</p>

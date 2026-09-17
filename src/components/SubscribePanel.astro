@@ -1,0 +1,39 @@
+---
+import type { RepositoryConfig } from '../config/site';
+import { discussionsUrl, repositoryFeedUrl } from '../lib/feeds';
+
+interface Props {
+  repository: RepositoryConfig;
+}
+
+const { repository } = Astro.props;
+const label = repository.label ?? `${repository.owner}/${repository.name}`;
+const key = `${repository.owner}/${repository.name}`;
+---
+
+<section class="subscribe-panel" data-detail data-key={key} aria-labelledby={`subscribe-${repository.owner}-${repository.name}`}>
+  <div class="subscribe-lead">
+    <h2 id={`subscribe-${repository.owner}-${repository.name}`}>Subscribe to {label}</h2>
+    <p>
+      Every discussion board and every category publishes an Atom feed. Feeds need no
+      token and no account, and they keep working when the metrics above cannot load.
+    </p>
+    <a class="subscribe subscribe-primary" href={repositoryFeedUrl(repository)}>
+      Subscribe to all discussions
+    </a>
+    <p class="feed-url"><code>{repositoryFeedUrl(repository)}</code></p>
+  </div>
+
+  <div class="subscribe-categories">
+    <h3>Per-category feeds</h3>
+    <p class="muted" data-category-status>
+      Categories are read from the API. Load metrics to list them, or use the board
+      feed, which covers every category.
+    </p>
+    <ul class="category-feeds" data-categories></ul>
+  </div>
+
+  <p class="detail-meta" data-meta>
+    <a href={discussionsUrl(repository)}>Open the discussion board on GitHub</a>
+  </p>
+</section>
