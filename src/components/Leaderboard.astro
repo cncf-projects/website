@@ -1,13 +1,13 @@
 ---
-import type { RepositoryConfig } from '../config/site';
 import { analysis } from '../config/site';
 import RepositoryRow from './RepositoryRow.astro';
+import type { RepositoryView } from '../lib/snapshot';
 
 interface Props {
-  repositories: RepositoryConfig[];
+  views: RepositoryView[];
 }
 
-const { repositories } = Astro.props;
+const { views } = Astro.props;
 
 const headers = [
   ['Repository', 'col-repo', ''],
@@ -43,7 +43,7 @@ const headers = [
       </tr>
     </thead>
     <tbody>
-      {repositories.map((repository) => <RepositoryRow repository={repository} />)}
+      {views.map((view) => <RepositoryRow view={view} />)}
     </tbody>
   </table>
 </div>

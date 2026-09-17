@@ -1,8 +1,14 @@
 # Discussion engagement
 
 A static site that measures GitHub Discussions engagement and makes subscribing to a
-board the primary action. The browser reads the GitHub GraphQL API directly when the
-page loads; there is no server, no database, and no build-time data pipeline.
+board the primary action.
+
+Live: <https://cncf-projects.github.io/website/>
+
+Discussion data is read from the GitHub GraphQL API **while the site is built**, using
+the deploy workflow's own `GITHUB_TOKEN`. Visitors are never asked for a credential and
+none is shipped to the browser. The published page is plain HTML with the numbers
+already in it.
 
 This is a single-repository prototype. It is enrolled with `cert-manager/cert-manager`.
 
@@ -10,56 +16,65 @@ This is a single-repository prototype. It is enrolled with `cert-manager/cert-ma
 
 ```sh
 npm install
-npm run dev
+GITHUB_TOKEN=$(gh auth token) npm run dev
 ```
 
-Open <http://localhost:4321/>.
+Open <http://localhost:4321/website/>. The `/website/` path is not a typo: the site is
+served from a project subpath on GitHub Pages, so `base` is set in `astro.config.mjs`
+and the dev server mirrors it.
 
 ```sh
-npm run build     # static output in dist/
-npm run preview   # serve dist/
-npm test          # metric computation tests
-npx astro check   # type check
+GITHUB_TOKEN=$(gh auth token) npm run build   # static output in dist/
+npm run preview                               # serve dist/ at /website/
+npm test                                      # metric and fetch-layer tests
+npx astro check                               # type check
+actionlint .github/workflows/*.yml            # workflow lint
 ```
+
+Building without a token still succeeds and still produces a working page; every metric
+reads "No data" and the subscription links work as normal. CI treats that as a failure
+(see below), but locally it is a quick way to see the degraded state.
 
 ## Authentication
 
 GitHub's GraphQL API rejects unauthenticated requests, including for public
-repositories. The Atom feed endpoints are anonymous; the GraphQL endpoint is not.
-Because this build is browser-only, with no server and no scheduled job to hold a
-credential, the page cannot load metrics without a token you supply. A backend proxy
-or a build-time fetch could hold auth instead, at the cost of no longer being a purely
-static, client-fetching site.
+repositories. Atom feed endpoints are anonymous; the GraphQL endpoint is not.
 
-This site ships no credential and has no server to hold one. You supply a token in the
-form on the page. It is kept in memory and sent only to `api.github.com`. Ticking
-"Keep it for this browser tab only" stores it in `sessionStorage`, which is cleared
-when the tab closes; leave it unticked and nothing is persisted.
+Because the data is fetched at build time, the token never leaves CI:
 
-Create a token at <https://github.com/settings/tokens>:
+- In GitHub Actions, the workflow maps `GITHUB_TOKEN: ${{ github.token }}` onto the
+  build step. Actions does not place the token in a step's environment automatically, so
+  that mapping is required.
+- Locally, export `GITHUB_TOKEN` yourself. `gh auth token` is the easy source.
 
-- A **classic** token with **no scopes selected** is sufficient for public repositories.
-- A **fine-grained** token needs only `Discussions: read-only` on the repositories you
-  enroll.
+The repository-scoped `GITHUB_TOKEN` can read public discussions in other
+organisations, which is what makes this work for repositories the site does not live in.
+It also gets a 10,000 point/hour GraphQL budget in Actions, against 5,000 for a personal
+token.
 
-Do not use a token with write access. A token in a browser page is readable by anything
-running in that page.
+There is deliberately no `PUBLIC_GITHUB_TOKEN` and no in-page token prompt. Astro inlines
+`PUBLIC_`-prefixed variables into the client bundle, and a credential typed into a public
+page is readable by anything else running in it.
 
-There is deliberately no `PUBLIC_GITHUB_TOKEN` environment variable. Astro inlines
-`PUBLIC_`-prefixed variables into the client bundle, so configuring one would publish
-the credential to every visitor of a deployed build.
+## Freshness
 
-## Which metrics come from a single fetch
+Metrics are as of the last build. The site rebuilds when `main` is pushed.
 
-All of them, including the sparkline and the trend. Neither needs an accumulated
-snapshot history.
+There is no scheduled rebuild, so if nothing is pushed the numbers age. Adding one is a
+`schedule:` trigger on the deploy workflow, deliberately left out of this prototype.
+
+The Atom feeds do not have this limitation. They come straight from GitHub and update the
+moment somebody posts, which is the main reason subscription is the primary action here
+rather than a footnote.
+
+## Which metrics come from a single read
+
+All of them, including the sparkline and the trend. Neither needs accumulated snapshot
+history.
 
 Every discussion, comment, and reply carries its own `createdAt` timestamp in the
-GraphQL response. One fetch therefore reconstructs *when* activity happened, which is
-enough to bucket it into a sparkline and to compare one period against the previous
-one. Nothing needs to be remembered between page loads.
-
-Computed live, with no stored history:
+GraphQL response. One read therefore reconstructs *when* activity happened, which is
+enough to bucket it into a sparkline and compare one period against the previous one.
 
 | Metric | Source |
 |---|---|
@@ -77,39 +92,39 @@ Computed live, with no stored history:
 
 Not the trend, but state that GitHub only reports as it currently stands:
 
-- **Historical answer status.** `isAnswered` is a present-tense flag. `answerChosenAt`
-  gives the moment an answer was accepted, so answer latency is recoverable, but a
-  question that was unanswered for a year and answered yesterday cannot be told apart
-  from one answered immediately unless that field is set.
-- **Deleted content.** Removed discussions and comments are absent from the API. Any
-  window containing them is undercounted, permanently.
-- **Category moves.** A discussion reports its current category. Past activity is
+- **Historical answer status.** `isAnswered` is present-tense. `answerChosenAt` recovers
+  when an answer was accepted, but nothing recovers one that was accepted and later
+  unaccepted.
+- **Deleted content.** Removed discussions and comments are absent from the API, so any
+  window containing them is permanently undercounted.
+- **Category moves.** A discussion reports its current category; past activity is
   attributed to wherever it sits today.
-- **Deleted accounts.** These return a null author and cannot be attributed to a
-  person, so they are excluded from participant counts.
-
-Measuring any of those over time needs periodic snapshots. This prototype keeps none.
+- **Deleted accounts.** These return a null author and are excluded from participant
+  counts.
 
 ## Honest failure
 
-The fetch never blanks the page. A cell without a number states which of three things
-happened, and the distinction is enforced in `summarize`:
+A cell without a number states which of three things happened, and the distinction is
+enforced in `summarize`:
 
 - **No activity** — the window was read and nothing happened in it.
 - **Insufficient history** — the board was read, but not far enough back to answer that
   particular question.
-- **No data** — the fetch failed, so the metric was never measured.
+- **No data** — the read failed, so the metric was never measured.
 
-The truncation rule is not cosmetic. Discussions are paginated newest-first, so a
-short fetch still holds every discussion *opened* in the window; openings, answer
-ratio, and median first response stay exact. But a comment written yesterday can sit on
-a thread opened years ago, so any unread page leaves contribution counts undercounted
-by an unknown amount. Participants, comments, top category, sparkline, and trend
-therefore report insufficient history rather than a plausible-looking wrong number.
+The truncation rule is not cosmetic. Discussions are paginated newest-first, so a short
+read still holds every discussion *opened* in the window; openings, answered ratio, and
+median first response stay exact. But a comment written today can sit on a thread opened
+years ago, so any unread page leaves contribution counts undercounted by an unknown
+amount. Participants, comments, top category, sparkline, and trend therefore report
+insufficient history rather than a plausible-looking wrong number.
 
-Rate limiting, an invalid token, a repository with Discussions disabled, and a network
-failure are each surfaced on the affected row. Subscription links are static markup and
-keep working in every one of those cases.
+A repository that cannot be read at all does not fail the build or blank the page; its
+row says so and the rest of the site is unaffected.
+
+CI does fail if *no* repository yielded data, because a green deploy that quietly
+published "No data" everywhere is worse than a red one. The build emits
+`data-has-metrics` on `<body>` and the workflow checks it before publishing.
 
 ## Subscriptions
 
@@ -132,19 +147,20 @@ export const repositories: RepositoryConfig[] = [
 ```
 
 Nothing downstream contains the string `cert-manager`. The page maps over that array,
-the fetch layer takes a `RepositoryRef` argument, and the metric layer takes a
-`Snapshot`. Adding repositories is a data change.
+the fetch layer takes a `RepositoryRef`, and the metric layer takes a `Snapshot`. Adding
+repositories is a data change.
 
 Deliberately not built yet:
 
 - Landscape sync from <https://landscape.cncf.io> to generate the array
 - Sorting, filtering, and search across rows
 - Org-wide aggregate totals
-- Any snapshot or caching layer
+- Snapshot storage, caching, or scheduled refresh
 
-Fetch cost scales linearly: roughly one GraphQL request per 25 discussions, against a
-5,000 point/hour budget. `analysis.maxRequests` caps per-repository work, and a
-repository that hits the cap degrades to insufficient history rather than failing.
+Build cost scales linearly: roughly one GraphQL request per 25 discussions, against the
+10,000 point/hour Actions budget. Repositories are read four at a time.
+`analysis.maxRequests` caps per-repository work, and a repository that hits the cap
+degrades to insufficient history rather than failing.
 
 ## Layout
 
@@ -153,16 +169,19 @@ src/config/site.ts        enrolled repositories and analysis parameters
 src/lib/model.ts          domain types
 src/lib/github.ts         GraphQL client, pagination, rate limits
 src/lib/metrics.ts        metric computation and availability rules
+src/lib/snapshot.ts       build-time loader; reads GITHUB_TOKEN
+src/lib/format.ts         number and empty-state presentation
 src/lib/sparkline.ts      bucket counts to SVG geometry
 src/lib/feeds.ts          Atom feed URLs
 src/components/           leaderboard table, row, subscribe panel
-src/scripts/dashboard.ts  client orchestration
+src/scripts/dashboard.ts  the one client-side behaviour: the scroll hint
+.github/workflows/        build, verify, publish to Pages
 ```
 
 ## Verified against live data
 
-Loaded against `cert-manager/cert-manager` on 2026-09-17, over a trailing 90-day
-window, in 12 GraphQL requests reading all 259 discussions:
+Built against `cert-manager/cert-manager` over a trailing 90-day window, reading all 259
+discussions in 12 GraphQL requests:
 
 | Metric | Value |
 |---|---|
@@ -179,6 +198,7 @@ window, in 12 GraphQL requests reading all 259 discussions:
 Every figure was cross-checked against an independent implementation reading the same
 API payload.
 
-Note that this board is quiet: 259 discussions since 2020, and roughly one or two per
-month during 2026. The 90-day window in `analysis.windowDays` exists because a 30-day
-window returns a single discussion for this repository.
+This board is quiet: 259 discussions since 2020, roughly one or two per month during
+2026. The 90-day window in `analysis.windowDays` exists because a 30-day window returns
+a single discussion, leaving the answered ratio and median response with a sample size
+of one.

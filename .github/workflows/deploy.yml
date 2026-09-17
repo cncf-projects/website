@@ -32,7 +32,23 @@ jobs:
 
       - run: npx astro check
 
-      - run: npm run build
+      # Actions does not expose the token to a step's environment on its own.
+      # Without this mapping the build succeeds and publishes an empty page.
+      - name: Build with discussion data
+        run: npm run build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      # A green build that published "No data" everywhere would be worse than a
+      # red one, because nobody would notice.
+      - name: Fail if no discussion data was baked in
+        run: |
+          if grep -q 'data-has-metrics="true"' dist/index.html; then
+            echo "Discussion data present."
+          else
+            echo "::error::Build produced no discussion data; refusing to publish."
+            exit 1
+          fi
 
       - uses: actions/configure-pages@v6
 

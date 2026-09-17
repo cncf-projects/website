@@ -1,10 +1,18 @@
 ---
 import Leaderboard from '../components/Leaderboard.astro';
 import SubscribePanel from '../components/SubscribePanel.astro';
-import { analysis, repositories } from '../config/site';
+import { analysis } from '../config/site';
+import { loadRepositoryViews } from '../lib/snapshot';
 import '../styles/site.css';
 
 const windowDays = analysis.windowDays;
+const views = await loadRepositoryViews();
+const builtAt = new Date();
+const builtStamp = `${builtAt.toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+const icon = `${import.meta.env.BASE_URL}/favicon.svg`.replace(/\/{2,}/g, '/');
+// Read by CI: publishing a page where every figure says "No data" would be a
+// silent failure, so the build refuses rather than shipping an empty board.
+const hasMetrics = views.some((view) => view.snapshot.discussions.length > 0);
 ---
 
 <!doctype html>
@@ -13,70 +21,28 @@ const windowDays = analysis.windowDays;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
-    <link rel="icon" href={`${import.meta.env.BASE_URL}/favicon.svg`.replace(/\/{2,}/g, '/')} type="image/svg+xml" />
+    <link rel="icon" href={icon} type="image/svg+xml" />
     <meta
       name="description"
-      content="GitHub Discussions engagement metrics and Atom subscriptions, measured live from the GitHub API."
+      content="GitHub Discussions engagement metrics and Atom subscriptions for CNCF projects."
     />
     <title>Discussion engagement</title>
   </head>
-  <body>
+  <body data-has-metrics={hasMetrics ? 'true' : 'false'}>
     <main>
       <header class="page-header">
         <p class="eyebrow">Prototype</p>
         <h1>Discussion engagement</h1>
         <p class="lede">
           How busy a project's discussion board is, who is taking part, and how quickly
-          questions get answered. Measured over the last {windowDays} days, live from the
-          GitHub API. Subscribe to follow a board without checking this page.
+          questions get answered, over the last {windowDays} days. Subscribe to follow a
+          board without checking this page.
+        </p>
+        <p class="built">
+          <span>Measured when this page was built, </span>
+          <time datetime={builtAt.toISOString()}>{builtStamp}</time><span>.</span>
         </p>
       </header>
-
-      <section class="access" aria-labelledby="access-heading">
-        <div class="access-copy">
-          <h2 id="access-heading">Load live metrics</h2>
-          <p>
-            GitHub's GraphQL API requires a token, including for public discussions. This
-            site has no server and ships no credential: supply your own read-only token.
-            It is held in memory, sent only to api.github.com, and never written to disk
-            unless you tick the box below.
-          </p>
-          <p class="muted">
-            A classic token with no scopes selected, or a fine-grained token with
-            read-only access to public repositories, is enough. Do not paste a token that
-            carries write access.
-          </p>
-        </div>
-
-        <form id="access-form">
-          <label for="github-token">GitHub token</label>
-          <input
-            id="github-token"
-            name="token"
-            type="password"
-            autocomplete="off"
-            spellcheck="false"
-            required
-            placeholder="ghp_… or github_pat_…"
-          />
-          <label class="checkbox">
-            <input type="checkbox" id="remember" />
-            Keep it for this browser tab only
-          </label>
-          <div class="form-actions">
-            <button type="submit" id="load">Load metrics</button>
-            <button type="button" class="secondary" id="cancel" hidden>Cancel</button>
-          </div>
-          <p class="form-status" id="form-status" role="status">Waiting for a token.</p>
-        </form>
-
-        <noscript>
-          <p class="notice">
-            Metrics need JavaScript, because the browser calls the GitHub API directly.
-            The subscription links below work without it.
-          </p>
-        </noscript>
-      </section>
 
       <section aria-labelledby="leaderboard-heading">
         <div class="section-heading">
@@ -86,43 +52,44 @@ const windowDays = analysis.windowDays;
             arrive with the multi-repository pass.
           </p>
         </div>
-        <Leaderboard repositories={repositories} />
+        <Leaderboard views={views} />
       </section>
 
-      {repositories.map((repository) => <SubscribePanel repository={repository} />)}
+      {views.map((view) => <SubscribePanel view={view} />)}
 
       <section class="methodology" aria-labelledby="methodology-heading">
         <h2 id="methodology-heading">How these numbers are produced</h2>
 
         <p>
-          The browser reads the discussion board through the GitHub GraphQL API each time
-          you load metrics. Nothing is cached, stored, or precomputed at build time, so
-          every figure reflects the board as it stands at that moment.
+          The discussion board is read through the GitHub GraphQL API while this page is
+          built, using the workflow's own credentials. Nothing is asked of you, and no
+          token is shipped to your browser. The figures are therefore current as of the
+          build time shown above, not as of your visit. The Atom feeds are live.
         </p>
 
-        <h3>Computed from a single fetch</h3>
+        <h3>Computed from a single read</h3>
         <p>
-          Every metric on this page, including the sparkline and the trend, is derived
-          from timestamps that the API returns alongside each discussion, comment, and
-          reply. Because each contribution carries its own <code>createdAt</code>, one
-          fetch is enough to reconstruct when activity happened and to compare one period
-          against another. No snapshot history is required.
+          Every metric here, including the sparkline and the trend, comes from timestamps
+          the API returns alongside each discussion, comment, and reply. Because each
+          contribution carries its own <code>createdAt</code>, one read reconstructs when
+          activity happened and compares one period against another. No stored snapshot
+          history is required.
         </p>
 
         <h3>What would need stored history</h3>
         <p>
-          Metrics about state that GitHub only reports as it stands today. Whether a
-          question was answered is a current flag; a question answered last week is
-          indistinguishable from one answered a year ago except where GitHub also exposes
-          an <code>answerChosenAt</code> timestamp. Contributions that were deleted, and
-          discussions moved between categories, leave no trace to recover. Measuring those
-          over time needs periodic snapshots, which this prototype does not keep.
+          Metrics about state that GitHub only reports as it currently stands. Whether a
+          question is answered is a present-tense flag; <code>answerChosenAt</code>
+          recovers when an answer was accepted, but nothing recovers a question that was
+          answered and then unaccepted. Deleted discussions and comments are absent
+          entirely, and a discussion reports only the category it sits in today. This
+          prototype keeps no snapshots, so none of that is reconstructed.
         </p>
 
         <h3>Definitions</h3>
         <dl class="definitions">
           <dt>Window</dt>
-          <dd>The {windowDays} days ending when the fetch starts.</dd>
+          <dd>The {windowDays} days ending when the page was built.</dd>
 
           <dt>Participants</dt>
           <dd>
@@ -154,7 +121,7 @@ const windowDays = analysis.windowDays;
           <dt>New and returning</dt>
           <dd>
             A participant is new when the window holds their first contribution to this
-            board. This needs the whole board to be read; if the fetch stops early, the
+            board. This needs the whole board to be read; if the read stops early, the
             metric reports insufficient history rather than guessing.
           </dd>
 
@@ -173,8 +140,8 @@ const windowDays = analysis.windowDays;
           <span class="state-word">Insufficient history</span> means the board was read,
           but not far enough back to answer that particular question, usually because the
           request budget or the rate limit ran out.
-          <span class="state-word">No data</span> means the fetch failed, so the metric
-          was never measured. A failure affecting one metric leaves the others, and every
+          <span class="state-word">No data</span> means the read failed, so the metric was
+          never measured. A failure affecting one metric leaves the others, and every
           subscription link, intact.
         </p>
       </section>

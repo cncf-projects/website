@@ -1,18 +1,45 @@
 ---
-import type { RepositoryConfig } from '../config/site';
-import { analysis } from '../config/site';
-import { repositoryFeedUrl, discussionsUrl } from '../lib/feeds';
+import { discussionsUrl, repositoryFeedUrl } from '../lib/feeds';
+import { decimal, duration, percent, present } from '../lib/format';
+import type { RepositoryView } from '../lib/snapshot';
 import { sparkline } from '../lib/sparkline';
 
 interface Props {
-  repository: RepositoryConfig;
+  view: RepositoryView;
 }
 
-const { repository } = Astro.props;
-const label = repository.label ?? `${repository.owner}/${repository.name}`;
-const key = `${repository.owner}/${repository.name}`;
-const empty = sparkline(new Array(analysis.sparklineBuckets).fill(0));
+const { view } = Astro.props;
+const { summary, snapshot, label, repository } = view;
 
+const series = summary.series.state === 'ok' ? summary.series.value : null;
+const chart = series ? sparkline(series.buckets) : null;
+const bucketDays = series ? Math.round(series.bucketDays) : 0;
+
+const trend = summary.trend.state === 'ok' ? summary.trend.value : null;
+const direction = !trend ? 'flat' : trend.change > 0 ? 'up' : trend.change < 0 ? 'down' : 'flat';
+const trendText = !trend
+  ? present(summary.trend, () => '').text
+  : trend.change === 0
+    ? 'No change'
+    : `${trend.change > 0 ? '+' : '\u2212'}${
+        trend.ratio === null
+          ? decimal.format(Math.abs(trend.change))
+          : percent.format(Math.abs(trend.ratio))
+      }`;
+
+const cells = [
+  present(summary.participants, (value) => decimal.format(value)),
+  present(summary.discussionsOpened, (value) => decimal.format(value)),
+  present(summary.comments, (value) => decimal.format(value)),
+  present(
+    summary.answered,
+    (value) => `${percent.format(value.ratio)} of ${value.answered + value.unanswered}`,
+    'No questions',
+  ),
+  present(summary.medianFirstResponse, (value) => duration(value), 'No responses'),
+  present(summary.cohorts, (value) => `${value.newcomers} / ${value.returning}`),
+  present(summary.topCategory, (value) => value.names.join(', ')),
+];
 const columns = [
   'participants',
   'discussions',
@@ -21,42 +48,61 @@ const columns = [
   'response',
   'cohorts',
   'category',
-] as const;
+];
+
+const errors = [...new Set(snapshot.errors)];
+const status = errors.length > 0
+  ? errors.join(' ')
+  : `Read ${decimal.format(snapshot.discussions.length)} discussions${
+      snapshot.historyComplete ? '' : ' (history incomplete)'
+    }`;
 ---
 
-<tr data-repository data-owner={repository.owner} data-name={repository.name} data-key={key}>
+<tr>
   <th scope="row" class="col-repo">
     <a href={discussionsUrl(repository)}>{label}</a>
-    <span class="row-status" data-status>Not loaded</span>
+    <span class:list={['row-status', { 'row-status-error': errors.length > 0 }]}>{status}</span>
   </th>
 
   <td class="col-subscribe">
-    <a class="subscribe subscribe-row" href={repositoryFeedUrl(repository)} data-feed>
-      Subscribe
-    </a>
+    <a class="subscribe subscribe-row" href={repositoryFeedUrl(repository)}>Subscribe</a>
   </td>
 
   <td class="col-spark">
-    <svg
-      class="sparkline"
-      data-sparkline
-      viewBox={`0 0 ${empty.width} ${empty.height}`}
-      width={empty.width}
-      height={empty.height}
-      preserveAspectRatio="none"
-      role="img"
-      aria-label={`Discussion activity for ${label}: not loaded`}
-    >
-      <path class="sparkline-area" data-sparkline-area d="" />
-      <polyline class="sparkline-line" data-sparkline-line points="" />
-    </svg>
-    <span class="cell-empty" data-sparkline-empty>Not loaded</span>
+    {chart ? (
+      <svg
+        class="sparkline"
+        viewBox={`0 0 ${chart.width} ${chart.height}`}
+        width={chart.width}
+        height={chart.height}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Discussion activity for ${label}: ${series!.buckets.join(', ')} contributions per ${bucketDays}-day period, oldest first. Peak ${chart.peak}.`}
+      >
+        <path class="sparkline-area" d={chart.area} />
+        <polyline class="sparkline-line" points={chart.line} />
+      </svg>
+    ) : (
+      <span class="cell-empty" title={present(summary.series, () => '').title}>
+        {present(summary.series, () => '').text}
+      </span>
+    )}
   </td>
 
-  <td class="col-trend"><span class="trend" data-trend>&mdash;</span></td>
+  <td class="col-trend">
+    <span
+      class:list={['trend', trend ? `trend-${direction}` : 'cell-empty']}
+      title={trend
+        ? `${trend.current} contributions this window against ${trend.previous} in the previous one.`
+        : present(summary.trend, () => '').title}
+    >{trendText}</span>
+  </td>
 
-  {columns.map((column) => (
-    <td class={`col-${column}`}><span data-metric={column}>&mdash;</span></td>
+  {cells.map((cell, index) => (
+    <td class={`col-${columns[index]}`}>
+      <span class:list={[{ 'cell-empty': cell.empty }]} title={cell.title || undefined}>
+        {cell.text}
+      </span>
+    </td>
   ))}
-
 </tr>
