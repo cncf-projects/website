@@ -10,7 +10,9 @@ the deploy workflow's own `GITHUB_TOKEN`. Visitors are never asked for a credent
 none is shipped to the browser. The published page is plain HTML with the numbers
 already in it.
 
-This is a single-repository prototype. It is enrolled with `cert-manager/cert-manager`.
+This is a prototype. Six repositories are enrolled: `bootc-dev/bootc`,
+`cert-manager/cert-manager`, `cloud-custodian/cloud-custodian`, `Project-HAMi/HAMi`,
+`kubestellar/kubestellar`, and `perses/perses`.
 
 ## Running it
 
@@ -142,12 +144,17 @@ Enrollment lives entirely in `src/config/site.ts`:
 
 ```ts
 export const repositories: RepositoryConfig[] = [
+  { owner: 'bootc-dev', name: 'bootc' },
   { owner: 'cert-manager', name: 'cert-manager' },
+  { owner: 'cloud-custodian', name: 'cloud-custodian' },
+  { owner: 'Project-HAMi', name: 'HAMi' },
+  { owner: 'kubestellar', name: 'kubestellar' },
+  { owner: 'perses', name: 'perses' },
 ];
 ```
 
-Nothing downstream contains the string `cert-manager`. The page maps over that array,
-the fetch layer takes a `RepositoryRef`, and the metric layer takes a `Snapshot`. Adding
+Nothing downstream contains a repository name. The page maps over that array, the fetch
+layer takes a `RepositoryRef`, and the metric layer takes a `Snapshot`. Adding
 repositories is a data change.
 
 Deliberately not built yet:
@@ -202,3 +209,21 @@ This board is quiet: 259 discussions since 2020, roughly one or two per month du
 2026. The 90-day window in `analysis.windowDays` exists because a 30-day window returns
 a single discussion, leaving the answered ratio and median response with a sample size
 of one.
+
+### The full board
+
+All six enrolled repositories read cleanly in a 22-second build, none of them truncated
+by `analysis.maxRequests`. As of a 2026-09-17 build, trailing 90 days:
+
+| Repository | Discussions read | Participants | Opened | Comments | Answered | First response | Trend |
+|---|---|---|---|---|---|---|---|
+| `bootc-dev/bootc` | 95 | 16 | 7 | 37 | 14% of 7 | 8.6 h | +340% |
+| `cert-manager/cert-manager` | 259 | 10 | 2 | 13 | 0% of 1 | 24.2 h | No change |
+| `cloud-custodian/cloud-custodian` | 422 | 2 | 2 | 0 | 0% of 1 | No responses | −50% |
+| `Project-HAMi/HAMi` | 13 | 2 | 1 | 1 | No questions | 2.9 days | No change |
+| `kubestellar/kubestellar` | 25 | No activity | 0 | 0 | No questions | No responses | −100% |
+| `perses/perses` | 96 | 8 | 3 | 21 | No questions | 15.3 h | −4% |
+
+`kubestellar/kubestellar` is the useful case: the window was read in full and nothing
+happened in it, so the row says "No activity" rather than "No data".
+

@@ -15,7 +15,12 @@ export interface RepositoryConfig {
 }
 
 export const repositories: RepositoryConfig[] = [
+  { owner: 'bootc-dev', name: 'bootc' },
   { owner: 'cert-manager', name: 'cert-manager' },
+  { owner: 'cloud-custodian', name: 'cloud-custodian' },
+  { owner: 'Project-HAMi', name: 'HAMi' },
+  { owner: 'kubestellar', name: 'kubestellar' },
+  { owner: 'perses', name: 'perses' },
 ];
 
 export interface AnalysisConfig {
